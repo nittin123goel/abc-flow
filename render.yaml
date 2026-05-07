@@ -1,0 +1,48 @@
+# Render deploy config
+# Use Render's "New from Blueprint" feature and point at this file.
+# OR set up the two services manually using the values below.
+
+services:
+  # ===== BACKEND API =====
+  - type: web
+    name: abc-cashflow-api
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: SUPABASE_URL
+        sync: false                    # set in Render dashboard
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false                    # set to your frontend URL e.g. https://abc-cashflow.onrender.com
+
+  # ===== FRONTEND (static site) =====
+  - type: web
+    name: abc-cashflow
+    runtime: static
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    envVars:
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: VITE_API_URL
+        sync: false                    # set to backend URL e.g. https://abc-cashflow-api.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
