@@ -32,7 +32,11 @@ export function AppShell() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
-  const nav = user.role === 'admin' ? adminNav : employeeNav;
+  // Admins and supervisors share the admin nav; supervisors just see their own team.
+  const nav = user.role === 'employee' ? employeeNav : adminNav;
+  const roleLabel = user.role === 'admin' ? 'Administrator'
+    : user.role === 'supervisor' ? 'Supervisor'
+    : user.employee_code;
 
   return (
     <div className="min-h-screen flex">
@@ -59,9 +63,9 @@ export function AppShell() {
               <div className="font-semibold text-sm truncate">{user.full_name}</div>
               <div
                 className="text-[10px] tracking-[0.14em] uppercase font-semibold mt-0.5"
-                style={{ color: user.role === 'admin' ? 'var(--accent)' : 'var(--credit)' }}
+                style={{ color: user.role === 'employee' ? 'var(--credit)' : 'var(--accent)' }}
               >
-                {user.role === 'admin' ? 'Administrator' : user.employee_code}
+                {roleLabel}
               </div>
             </div>
           </div>

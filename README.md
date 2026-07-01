@@ -7,8 +7,11 @@ Stack: **React + Vite** (frontend) · **Node + Express** (backend) · **Supabase
 
 ## What this does
 
-- **Admins** create employees, allocate "coins" (virtual ₹), define categories, view/export reports.
+- **Admins** create supervisors & employees, allocate "coins" (virtual ₹), define categories, view/export reports for everyone.
+- **Supervisors** manage their own team: add/manage employees under them, add categories & subcategories, allocate & adjust funds, and view reports/ledger scoped to their team. Admins and supervisors share the same portal — supervisors just see less.
 - **Employees** see their balance, submit expenses with receipts, view their history.
+
+> **Roles & hierarchy:** `admin` → `supervisor` → `employee`. Every employee reports to exactly one supervisor (`users.supervisor_id`). Admins pick the supervisor when creating an employee; supervisors create employees directly under themselves. Run `supabase/migrations/004_supervisors.sql` to enable this on an existing v1 database.
 - Every transaction posts a balanced **double-entry ledger row pair** (debit + credit). The ledger is the source of truth — balances are computed from it.
 - Receipts are uploaded to **private Supabase Storage** with short-lived signed URLs.
 - Excel & PDF exports for ledger, daily, and monthly reports.
@@ -22,7 +25,8 @@ abc-cashflow/
 ├── supabase/migrations/        # SQL — run these in Supabase SQL Editor
 │   ├── 001_init.sql            # tables, indexes, functions, views, RLS, seed
 │   ├── 002_storage.sql         # private "receipts" bucket + storage RLS
-│   └── 003_bootstrap_admin.sql # create your first admin row
+│   ├── 003_bootstrap_admin.sql # create your first admin row
+│   └── 004_supervisors.sql     # supervisor role + team hierarchy (run after 001)
 ├── backend/                    # Express API
 │   ├── src/server.js
 │   ├── src/routes/{admin,employee}.js
@@ -200,10 +204,15 @@ The DB functions `post_allocation`, `post_expense`, `post_adjustment` are `SECUR
 - `GET /api/me/receipts/signed-url?path=...` — 5-min signed URL
 - `GET /api/categories`
 
-### Admin only
+### Admin & Supervisor (supervisors see/act on their own team only)
 - `GET /api/admin/employees`
-- `POST /api/admin/employees` — body: `{ email, password, full_name, employee_code, phone? }`
+- `POST /api/admin/employees` — body: `{ email, password, full_name, employee_code, phone?, supervisor_id }` (`supervisor_id` required for admins; forced to self for supervisors)
 - `PATCH /api/admin/employees/:id`
+- `POST /api/admin/employees/:id/password` — body: `{ password }` (reset a password)
+
+### Admin only
+- `GET /api/admin/supervisors`
+- `POST /api/admin/supervisors` — body: `{ email, password, full_name, employee_code, phone? }`
 - `GET /api/admin/categories`
 - `POST /api/admin/categories`
 - `POST /api/admin/categories/:id/subcategories`

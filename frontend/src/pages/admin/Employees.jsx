@@ -1,21 +1,28 @@
 import { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../../lib/api.js';
 import { fmt } from '../../lib/format.js';
+import { useAuth } from '../../stores/auth.js';
 import { PageHeader } from '../../components/AppShell.jsx';
 import { Modal } from '../../components/Modal.jsx';
 import { AllocateModal, AdjustModal } from './AllocateModal.jsx';
 import { toast } from '../../components/Toast.jsx';
 
 export function AdminEmployees() {
+  const role = useAuth(s => s.user.role);
+  const isAdmin = role === 'admin';
   const [list, setList] = useState([]);
+  const [supervisors, setSupervisors] = useState([]);
   const [allocFor, setAllocFor] = useState(null);
   const [adjustFor, setAdjustFor] = useState(null);
+  const [pwdFor, setPwdFor] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showCreateSup, setShowCreateSup] = useState(false);
 
   const load = async () => {
     setList(await apiGet('/api/admin/employees'));
+    if (isAdmin) setSupervisors(await apiGet('/api/admin/supervisors'));
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
   return (
     <>
@@ -23,12 +30,17 @@ export function AdminEmployees() {
         crumb="Operations"
         title="Employees"
         actions={
-          <button onClick={() => setShowCreate(true)} className="btn-primary">+ Add Employee</button>
+          <>
+            {isAdmin && (
+              <button onClick={() => setShowCreateSup(true)} className="btn-secondary">+ Add Supervisor</button>
+            )}
+            <button onClick={() => setShowCreate(true)} className="btn-primary">+ Add Employee</button>
+          </>
         }
       />
 
       <div className="text-sm text-[var(--muted)] mb-4">
-        {list.length} employees
+        {list.length} employees{isAdmin ? ` · ${supervisors.length} supervisors` : ''}
       </div>
 
       <div className="card">
@@ -37,6 +49,7 @@ export function AdminEmployees() {
             <tr>
               <th className="table-header">Name</th>
               <th className="table-header">Code</th>
+              {isAdmin && <th className="table-header">Supervisor</th>}
               <th className="table-header text-right">Allocated</th>
               <th className="table-header text-right">Spent</th>
               <th className="table-header text-right">Balance</th>
@@ -58,6 +71,7 @@ export function AdminEmployees() {
                   </div>
                 </td>
                 <td className="table-cell mono text-xs">{e.employee_code}</td>
+                {isAdmin && <td className="table-cell text-xs text-[var(--muted)]">{e.supervisor_name || '—'}</td>}
                 <td className="table-cell text-right mono">{fmt(e.total_allocated)}</td>
                 <td className="table-cell text-right mono" style={{ color: 'var(--debit)' }}>{fmt(e.total_spent)}</td>
                 <td
@@ -80,12 +94,18 @@ export function AdminEmployees() {
                     >
                       Adjust
                     </button>
+                    <button
+                      onClick={() => setPwdFor(e)}
+                      className="btn-secondary !py-1.5 !px-3 text-xs"
+                    >
+                      Password
+                    </button>
                   </div>
                 </td>
               </tr>
             ))}
             {list.length === 0 && (
-              <tr><td colSpan="6"><div className="empty-state">No employees yet — add the first one</div></td></tr>
+              <tr><td colSpan={isAdmin ? 7 : 6}><div className="empty-state">No employees yet — add the first one</div></td></tr>
             )}
           </tbody>
         </table>
@@ -97,16 +117,27 @@ export function AdminEmployees() {
       {adjustFor && (
         <AdjustModal employee={adjustFor} onClose={() => setAdjustFor(null)} onDone={() => { setAdjustFor(null); load(); }} />
       )}
+      {pwdFor && (
+        <ResetPasswordModal employee={pwdFor} onClose={() => setPwdFor(null)} onDone={() => setPwdFor(null)} />
+      )}
       {showCreate && (
-        <CreateEmployeeModal onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load(); }} />
+        <CreateEmployeeModal
+          isAdmin={isAdmin}
+          supervisors={supervisors}
+          onClose={() => setShowCreate(false)}
+          onDone={() => { setShowCreate(false); load(); }}
+        />
+      )}
+      {showCreateSup && (
+        <CreateSupervisorModal onClose={() => setShowCreateSup(false)} onDone={() => { setShowCreateSup(false); load(); }} />
       )}
     </>
   );
 }
 
-function CreateEmployeeModal({ onClose, onDone }) {
+function CreateEmployeeModal({ isAdmin, supervisors, onClose, onDone }) {
   const [form, setForm] = useState({
-    full_name: '', email: '', employee_code: '', phone: '', password: '',
+    full_name: '', email: '', employee_code: '', phone: '', password: '', supervisor_id: '',
   });
   const [busy, setBusy] = useState(false);
 
@@ -150,6 +181,23 @@ function CreateEmployeeModal({ onClose, onDone }) {
           <input className="input" value={form.phone}
             onChange={e => setForm({ ...form, phone: e.target.value })} />
         </div>
+        {isAdmin && (
+          <div>
+            <label className="label">Supervisor</label>
+            <select required className="input" value={form.supervisor_id}
+              onChange={e => setForm({ ...form, supervisor_id: e.target.value })}>
+              <option value="">Select a supervisor…</option>
+              {supervisors.map(s => (
+                <option key={s.id} value={s.id}>{s.full_name} · {s.employee_code}</option>
+              ))}
+            </select>
+            {supervisors.length === 0 && (
+              <div className="text-xs mt-1" style={{ color: 'var(--debit)' }}>
+                Add a supervisor first — every employee must report to one.
+              </div>
+            )}
+          </div>
+        )}
         <div>
           <label className="label">Initial Password</label>
           <input type="text" required minLength="8" className="input mono" value={form.password}
@@ -157,8 +205,111 @@ function CreateEmployeeModal({ onClose, onDone }) {
           <div className="text-xs text-[var(--muted)] mt-1">Share with the employee securely. They can change it after first login.</div>
         </div>
         <div className="flex gap-2 pt-3">
-          <button type="submit" disabled={busy} className="btn-primary flex-1">
+          <button type="submit" disabled={busy || (isAdmin && supervisors.length === 0)} className="btn-primary flex-1">
             {busy ? 'Creating…' : 'Create Employee'}
+          </button>
+          <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function CreateSupervisorModal({ onClose, onDone }) {
+  const [form, setForm] = useState({
+    full_name: '', email: '', employee_code: '', phone: '', password: '',
+  });
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await apiPost('/api/admin/supervisors', form);
+      toast('Supervisor created');
+      onDone?.();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="display text-2xl font-bold mb-6">New Supervisor</div>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Full Name</label>
+            <input required className="input" value={form.full_name}
+              onChange={e => setForm({ ...form, full_name: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Staff Code</label>
+            <input required className="input mono" placeholder="SUP001" value={form.employee_code}
+              onChange={e => setForm({ ...form, employee_code: e.target.value.toUpperCase() })} />
+          </div>
+        </div>
+        <div>
+          <label className="label">Email</label>
+          <input type="email" required className="input" value={form.email}
+            onChange={e => setForm({ ...form, email: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">Phone (optional)</label>
+          <input className="input" value={form.phone}
+            onChange={e => setForm({ ...form, phone: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">Initial Password</label>
+          <input type="text" required minLength="8" className="input mono" value={form.password}
+            onChange={e => setForm({ ...form, password: e.target.value })} />
+          <div className="text-xs text-[var(--muted)] mt-1">Share securely. The supervisor can then add and manage their own team.</div>
+        </div>
+        <div className="flex gap-2 pt-3">
+          <button type="submit" disabled={busy} className="btn-primary flex-1">
+            {busy ? 'Creating…' : 'Create Supervisor'}
+          </button>
+          <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ResetPasswordModal({ employee, onClose, onDone }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await apiPost(`/api/admin/employees/${employee.employee_id}/password`, { password });
+      toast('Password updated');
+      onDone?.();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="display text-2xl font-bold mb-1">Reset Password</div>
+      <div className="text-sm text-[var(--muted)] mb-6">{employee.full_name} · {employee.email}</div>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label className="label">New Password</label>
+          <input type="text" required minLength="8" className="input mono" value={password}
+            onChange={e => setPassword(e.target.value)} />
+          <div className="text-xs text-[var(--muted)] mt-1">Minimum 8 characters. Share with the employee securely.</div>
+        </div>
+        <div className="flex gap-2 pt-3">
+          <button type="submit" disabled={busy} className="btn-primary flex-1">
+            {busy ? 'Updating…' : 'Update Password'}
           </button>
           <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
         </div>
