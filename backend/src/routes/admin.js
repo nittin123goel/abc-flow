@@ -187,6 +187,31 @@ router.post('/employees/:id/password', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Promote an employee to supervisor (admin only).
+// Clears supervisor_id (supervisors report to no one) and frees the role.
+// Their existing wallet ledger entries are left intact but stop showing in
+// the employee list, so promote only staff whose balance has been reconciled.
+router.post('/employees/:id/promote', requireRole('admin'), async (req, res) => {
+  const { data: target } = await supabaseAdmin
+    .from('users')
+    .select('id, role')
+    .eq('id', req.params.id)
+    .single();
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role !== 'employee') {
+    return res.status(400).json({ error: 'Only employees can be promoted to supervisor' });
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({ role: 'supervisor', supervisor_id: null, updated_at: new Date().toISOString() })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
 // ===== CATEGORIES & SUBCATEGORIES =====
 
 router.get('/categories', async (req, res) => {

@@ -24,6 +24,19 @@ export function AdminEmployees() {
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
+  const promote = async (e) => {
+    if (!window.confirm(
+      `Make ${e.full_name} a supervisor?\n\nThey will move out of the employee list and can then manage their own team. Their wallet balance (${fmt(e.balance)}) will no longer be tracked as an employee.`
+    )) return;
+    try {
+      await apiPost(`/api/admin/employees/${e.employee_id}/promote`);
+      toast(`${e.full_name} is now a supervisor`);
+      load();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -100,6 +113,14 @@ export function AdminEmployees() {
                     >
                       Password
                     </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => promote(e)}
+                        className="btn-secondary !py-1.5 !px-3 text-xs"
+                      >
+                        Make Supervisor
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
