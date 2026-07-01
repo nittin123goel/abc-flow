@@ -56,6 +56,58 @@ export function AdminEmployees() {
         {list.length} employees{isAdmin ? ` · ${supervisors.length} supervisors` : ''}
       </div>
 
+      {isAdmin && supervisors.length > 0 && (
+        <div className="card mb-6">
+          <div className="px-4 pt-4 text-[10px] tracking-[0.16em] uppercase text-[var(--muted-2)] font-bold">
+            Supervisors
+          </div>
+          <table className="w-full">
+            <thead>
+              <tr>
+                <th className="table-header">Name</th>
+                <th className="table-header">Code</th>
+                <th className="table-header">Status</th>
+                <th className="table-header text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {supervisors.map(s => (
+                <tr key={s.id}>
+                  <td className="table-cell">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-[var(--paper)] border border-[var(--rule-2)] flex items-center justify-center display font-semibold text-sm">
+                        {s.full_name.charAt(0)}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-[var(--ink)]">{s.full_name}</div>
+                        <div className="text-xs text-[var(--muted)]">{s.email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="table-cell mono text-xs">{s.employee_code}</td>
+                  <td className="table-cell text-xs">
+                    <span className="badge" style={{
+                      background: s.is_active ? '#E8F1ED' : '#FBEAEA',
+                      color: s.is_active ? 'var(--credit)' : 'var(--debit)',
+                    }}>
+                      {s.is_active ? 'active' : 'inactive'}
+                    </span>
+                  </td>
+                  <td className="table-cell text-right">
+                    <button
+                      onClick={() => setPwdFor({ employee_id: s.id, full_name: s.full_name, email: s.email })}
+                      className="btn-secondary !py-1.5 !px-3 text-xs"
+                    >
+                      Password
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="card">
         <table className="w-full">
           <thead>
