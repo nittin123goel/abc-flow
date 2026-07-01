@@ -7,17 +7,72 @@ import {
 } from '../services/export.js';
 
 const router = express.Router();
-router.use(requireAuth, requireRole('admin'));
+router.use(requireAuth, requireRole('admin', 'supervisor'));
+
+// Employee IDs the requester may see/act on.
+// Returns null for admins (meaning "all employees"), or an array
+// (possibly empty) of employee ids for supervisors (their own team).
+async function teamScope(req) {
+  if (req.user.role === 'admin') return null;
+  const { data } = await supabaseAdmin
+    .from('users')
+    .select('id')
+    .eq('supervisor_id', req.user.id)
+    .eq('role', 'employee');
+  return (data || []).map((u) => u.id);
+}
 
 // ===== EMPLOYEES =====
 
 router.get('/employees', async (req, res) => {
+  let q = supabaseAdmin.from('v_employee_summary').select('*').order('full_name');
+  if (req.user.role === 'supervisor') q = q.eq('supervisor_id', req.user.id);
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// Supervisors (admin only) — used for management + the assign-supervisor dropdown
+router.get('/supervisors', requireRole('admin'), async (req, res) => {
   const { data, error } = await supabaseAdmin
-    .from('v_employee_summary')
-    .select('*')
+    .from('users')
+    .select('id, full_name, email, employee_code, is_active')
+    .eq('role', 'supervisor')
     .order('full_name');
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// Create a supervisor (admin only)
+router.post('/supervisors', requireRole('admin'), async (req, res) => {
+  const { email, password, full_name, employee_code, phone } = req.body;
+  if (!email || !password || !full_name || !employee_code) {
+    return res.status(400).json({ error: 'email, password, full_name, employee_code required' });
+  }
+
+  const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+    email, password,
+    email_confirm: true,
+    user_metadata: { full_name },
+  });
+  if (authErr) return res.status(400).json({ error: authErr.message });
+
+  const { data: profile, error: profileErr } = await supabaseAdmin
+    .from('users')
+    .insert({
+      id: authData.user.id,
+      email, full_name, employee_code, phone,
+      role: 'supervisor',
+      is_active: true,
+    })
+    .select()
+    .single();
+
+  if (profileErr) {
+    await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
+    return res.status(400).json({ error: profileErr.message });
+  }
+  res.json(profile);
 });
 
 // Create new employee — creates auth user + public.users row
@@ -25,6 +80,26 @@ router.post('/employees', async (req, res) => {
   const { email, password, full_name, employee_code, phone } = req.body;
   if (!email || !password || !full_name || !employee_code) {
     return res.status(400).json({ error: 'email, password, full_name, employee_code required' });
+  }
+
+  // Determine the managing supervisor. Supervisors always create under
+  // themselves; admins must pick an existing supervisor.
+  let supervisor_id;
+  if (req.user.role === 'supervisor') {
+    supervisor_id = req.user.id;
+  } else {
+    supervisor_id = req.body.supervisor_id;
+    if (!supervisor_id) {
+      return res.status(400).json({ error: 'supervisor_id is required' });
+    }
+    const { data: sup } = await supabaseAdmin
+      .from('users')
+      .select('id, role')
+      .eq('id', supervisor_id)
+      .single();
+    if (!sup || sup.role !== 'supervisor') {
+      return res.status(400).json({ error: 'supervisor_id must reference a valid supervisor' });
+    }
   }
 
   // 1. Create auth user
@@ -42,6 +117,7 @@ router.post('/employees', async (req, res) => {
       id: authData.user.id,
       email, full_name, employee_code, phone,
       role: 'employee',
+      supervisor_id,
       is_active: true,
     })
     .select()
@@ -55,7 +131,24 @@ router.post('/employees', async (req, res) => {
   res.json(profile);
 });
 
+// Loads a user the requester is allowed to manage as an employee.
+// Admin → any employee; supervisor → only their own team. Returns null otherwise.
+async function loadManageableEmployee(req, id) {
+  const { data: target } = await supabaseAdmin
+    .from('users')
+    .select('id, role, supervisor_id')
+    .eq('id', id)
+    .single();
+  if (!target || target.role !== 'employee') return null;
+  if (req.user.role === 'admin') return target;
+  if (target.supervisor_id === req.user.id) return target;
+  return null;
+}
+
 router.patch('/employees/:id', async (req, res) => {
+  const target = await loadManageableEmployee(req, req.params.id);
+  if (!target) return res.status(403).json({ error: 'Not allowed to manage this employee' });
+
   const { full_name, phone, is_active } = req.body;
   const { data, error } = await supabaseAdmin
     .from('users')
@@ -67,22 +160,26 @@ router.patch('/employees/:id', async (req, res) => {
   res.json(data);
 });
 
-// Reset an employee's password — admin action
+// Reset a password — admin resets employees & supervisors; supervisor resets own team
 router.post('/employees/:id/password', async (req, res) => {
   const { password } = req.body;
   if (!password || password.length < 8) {
     return res.status(400).json({ error: 'password must be at least 8 characters' });
   }
 
-  // Guard: only allow resetting passwords for employees, never other admins
-  const { data: target, error: lookupErr } = await supabaseAdmin
+  const { data: target } = await supabaseAdmin
     .from('users')
-    .select('id, role')
+    .select('id, role, supervisor_id')
     .eq('id', req.params.id)
     .single();
-  if (lookupErr || !target) return res.status(404).json({ error: 'Employee not found' });
-  if (target.role !== 'employee') {
-    return res.status(403).json({ error: 'Can only reset employee passwords' });
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  const canReset =
+    req.user.role === 'admin'
+      ? target.role !== 'admin' // admin may reset supervisors + employees, not other admins
+      : target.role === 'employee' && target.supervisor_id === req.user.id; // supervisor → own team
+  if (!canReset) {
+    return res.status(403).json({ error: 'Not allowed to reset this password' });
   }
 
   const { error } = await supabaseAdmin.auth.admin.updateUserById(req.params.id, { password });
@@ -128,10 +225,14 @@ router.post('/categories/:id/subcategories', async (req, res) => {
 // ===== ALLOCATIONS =====
 
 router.get('/allocations', async (req, res) => {
-  const { data, error } = await supabaseAdmin
+  const ids = await teamScope(req);
+  if (ids && ids.length === 0) return res.json([]);
+  let q = supabaseAdmin
     .from('coin_allocations')
     .select('*, employee:users!coin_allocations_employee_id_fkey(full_name, employee_code)')
     .order('allocated_at', { ascending: false });
+  if (ids) q = q.in('employee_id', ids);
+  const { data, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -170,10 +271,13 @@ router.post('/adjustments', async (req, res) => {
 // ===== REPORTS =====
 
 router.get('/reports/dashboard', async (req, res) => {
+  const ids = await teamScope(req);
+  const scopeEmp = (q) => (ids ? q.in('employee_id', ids) : q);
+  const empQ = supabaseAdmin.from('v_employee_summary').select('*');
   const [employees, allocations, expenses] = await Promise.all([
-    supabaseAdmin.from('v_employee_summary').select('*'),
-    supabaseAdmin.from('coin_allocations').select('amount, allocated_at'),
-    supabaseAdmin.from('expenses').select('amount, expense_date, employee_id, category_id'),
+    ids ? empQ.eq('supervisor_id', req.user.id) : empQ,
+    scopeEmp(supabaseAdmin.from('coin_allocations').select('amount, allocated_at, employee_id')),
+    scopeEmp(supabaseAdmin.from('expenses').select('amount, expense_date, employee_id, category_id')),
   ]);
 
   const totalAllocated = (allocations.data || []).reduce((s, a) => s + Number(a.amount), 0);
@@ -198,8 +302,10 @@ router.get('/reports/dashboard', async (req, res) => {
 });
 
 router.get('/reports/daily', async (req, res) => {
+  const ids = await teamScope(req);
+  if (ids && ids.length === 0) return res.json([]);
   const date = req.query.date || new Date().toISOString().slice(0, 10);
-  const { data, error } = await supabaseAdmin
+  let q = supabaseAdmin
     .from('expenses')
     .select(`
       *,
@@ -209,6 +315,8 @@ router.get('/reports/daily', async (req, res) => {
     `)
     .eq('expense_date', date)
     .order('created_at', { ascending: false });
+  if (ids) q = q.in('employee_id', ids);
+  const { data, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -220,7 +328,9 @@ router.get('/reports/monthly', async (req, res) => {
   endDate.setMonth(endDate.getMonth() + 1);
   const end = endDate.toISOString().slice(0, 10);
 
-  const { data, error } = await supabaseAdmin
+  const ids = await teamScope(req);
+  if (ids && ids.length === 0) return res.json([]);
+  let q = supabaseAdmin
     .from('expenses')
     .select(`
       *,
@@ -231,20 +341,61 @@ router.get('/reports/monthly', async (req, res) => {
     .gte('expense_date', start)
     .lt('expense_date', end)
     .order('expense_date', { ascending: false });
+  if (ids) q = q.in('employee_id', ids);
+  const { data, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
 router.get('/reports/ledger', async (req, res) => {
   const { employee_id, type, from, to } = req.query;
-  let q = supabaseAdmin.from('ledger_entries').select('*').order('txn_date').order('txn_ref');
-  if (employee_id) q = q.eq('account_ref_id', employee_id).eq('account_type', 'employee_wallet');
-  if (type) q = q.eq('txn_type', type);
-  if (from) q = q.gte('txn_date', from);
-  if (to) q = q.lte('txn_date', to);
 
-  const { data: entries, error } = await q;
-  if (error) return res.status(500).json({ error: error.message });
+  // Decide which wallets the result is restricted to (null = no restriction).
+  const teamIds = await teamScope(req); // null for admin
+  let walletIds = null;
+  if (employee_id) {
+    if (teamIds && !teamIds.includes(employee_id)) return res.json([]); // supervisor outside team
+    walletIds = [employee_id];
+  } else if (teamIds) {
+    walletIds = teamIds; // supervisor: whole team
+  }
+  if (walletIds && walletIds.length === 0) return res.json([]);
+
+  const applyFilters = (q) => {
+    if (type) q = q.eq('txn_type', type);
+    if (from) q = q.gte('txn_date', from);
+    if (to) q = q.lte('txn_date', to);
+    return q;
+  };
+
+  let entries;
+  if (walletIds) {
+    // Find the vouchers touching these wallets, then return BOTH sides of
+    // each voucher so the ledger stays balanced (debit + matching credit).
+    const refQ = applyFilters(
+      supabaseAdmin
+        .from('ledger_entries')
+        .select('txn_ref')
+        .eq('account_type', 'employee_wallet')
+        .in('account_ref_id', walletIds),
+    );
+    const { data: refRows, error: refErr } = await refQ;
+    if (refErr) return res.status(500).json({ error: refErr.message });
+    const refs = [...new Set((refRows || []).map((r) => r.txn_ref))];
+    if (refs.length === 0) return res.json([]);
+
+    const { data, error } = await applyFilters(
+      supabaseAdmin.from('ledger_entries').select('*').in('txn_ref', refs),
+    ).order('txn_date').order('created_at');
+    if (error) return res.status(500).json({ error: error.message });
+    entries = data;
+  } else {
+    const { data, error } = await applyFilters(
+      supabaseAdmin.from('ledger_entries').select('*'),
+    ).order('txn_date').order('created_at');
+    if (error) return res.status(500).json({ error: error.message });
+    entries = data;
+  }
 
   // Hydrate account labels
   const employees = await supabaseAdmin.from('users').select('id, full_name').eq('role', 'employee');

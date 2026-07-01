@@ -18,7 +18,7 @@ export async function requireAuth(req, res, next) {
     // Look up the public.users row (role, name, etc.)
     const { data: profile, error: profileErr } = await supabaseAdmin
       .from('users')
-      .select('id, employee_code, full_name, email, role, is_active')
+      .select('id, employee_code, full_name, email, role, is_active, supervisor_id')
       .eq('id', user.id)
       .single();
 

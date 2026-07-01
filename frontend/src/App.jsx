@@ -18,19 +18,22 @@ import { EmployeeAddExpense } from './pages/employee/AddExpense.jsx';
 import { EmployeeHistory } from './pages/employee/History.jsx';
 import { EmployeeAllocations } from './pages/employee/Allocations.jsx';
 
+// Admins and supervisors share the /admin portal; employees use /employee.
+const homeFor = (user) => (user.role === 'employee' ? '/employee' : '/admin');
+
 function HomeRedirect() {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
-  return <Navigate to={user.role === 'admin' ? '/admin' : '/employee'} replace />;
+  return <Navigate to={homeFor(user)} replace />;
 }
 
-function RequireAuth({ children, role }) {
+function RequireAuth({ children, roles }) {
   const { user, loading } = useAuth();
   const location = useLocation();
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[var(--muted)]">Loading…</div>;
   if (!user) return <Navigate to="/login" state={{ from: location }} replace />;
-  if (role && user.role !== role) {
-    return <Navigate to={user.role === 'admin' ? '/admin' : '/employee'} replace />;
+  if (roles && !roles.includes(user.role)) {
+    return <Navigate to={homeFor(user)} replace />;
   }
   return children;
 }
@@ -48,7 +51,7 @@ export default function App() {
         {/* ADMIN */}
         <Route
           path="/admin"
-          element={<RequireAuth role="admin"><AppShell /></RequireAuth>}
+          element={<RequireAuth roles={['admin', 'supervisor']}><AppShell /></RequireAuth>}
         >
           <Route index element={<AdminDashboard />} />
           <Route path="employees" element={<AdminEmployees />} />
@@ -63,7 +66,7 @@ export default function App() {
         {/* EMPLOYEE */}
         <Route
           path="/employee"
-          element={<RequireAuth role="employee"><AppShell /></RequireAuth>}
+          element={<RequireAuth roles={['employee']}><AppShell /></RequireAuth>}
         >
           <Route index element={<EmployeeDashboard />} />
           <Route path="add" element={<EmployeeAddExpense />} />
