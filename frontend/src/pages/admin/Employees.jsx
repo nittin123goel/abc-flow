@@ -10,6 +10,7 @@ export function AdminEmployees() {
   const [list, setList] = useState([]);
   const [allocFor, setAllocFor] = useState(null);
   const [adjustFor, setAdjustFor] = useState(null);
+  const [pwdFor, setPwdFor] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
 
   const load = async () => {
@@ -80,6 +81,12 @@ export function AdminEmployees() {
                     >
                       Adjust
                     </button>
+                    <button
+                      onClick={() => setPwdFor(e)}
+                      className="btn-secondary !py-1.5 !px-3 text-xs"
+                    >
+                      Password
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -96,6 +103,9 @@ export function AdminEmployees() {
       )}
       {adjustFor && (
         <AdjustModal employee={adjustFor} onClose={() => setAdjustFor(null)} onDone={() => { setAdjustFor(null); load(); }} />
+      )}
+      {pwdFor && (
+        <ResetPasswordModal employee={pwdFor} onClose={() => setPwdFor(null)} onDone={() => setPwdFor(null)} />
       )}
       {showCreate && (
         <CreateEmployeeModal onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load(); }} />
@@ -159,6 +169,46 @@ function CreateEmployeeModal({ onClose, onDone }) {
         <div className="flex gap-2 pt-3">
           <button type="submit" disabled={busy} className="btn-primary flex-1">
             {busy ? 'Creating…' : 'Create Employee'}
+          </button>
+          <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ResetPasswordModal({ employee, onClose, onDone }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await apiPost(`/api/admin/employees/${employee.employee_id}/password`, { password });
+      toast('Password updated');
+      onDone?.();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="display text-2xl font-bold mb-1">Reset Password</div>
+      <div className="text-sm text-[var(--muted)] mb-6">{employee.full_name} · {employee.email}</div>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label className="label">New Password</label>
+          <input type="text" required minLength="8" className="input mono" value={password}
+            onChange={e => setPassword(e.target.value)} />
+          <div className="text-xs text-[var(--muted)] mt-1">Minimum 8 characters. Share with the employee securely.</div>
+        </div>
+        <div className="flex gap-2 pt-3">
+          <button type="submit" disabled={busy} className="btn-primary flex-1">
+            {busy ? 'Updating…' : 'Update Password'}
           </button>
           <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
         </div>

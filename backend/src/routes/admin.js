@@ -67,6 +67,29 @@ router.patch('/employees/:id', async (req, res) => {
   res.json(data);
 });
 
+// Reset an employee's password — admin action
+router.post('/employees/:id/password', async (req, res) => {
+  const { password } = req.body;
+  if (!password || password.length < 8) {
+    return res.status(400).json({ error: 'password must be at least 8 characters' });
+  }
+
+  // Guard: only allow resetting passwords for employees, never other admins
+  const { data: target, error: lookupErr } = await supabaseAdmin
+    .from('users')
+    .select('id, role')
+    .eq('id', req.params.id)
+    .single();
+  if (lookupErr || !target) return res.status(404).json({ error: 'Employee not found' });
+  if (target.role !== 'employee') {
+    return res.status(403).json({ error: 'Can only reset employee passwords' });
+  }
+
+  const { error } = await supabaseAdmin.auth.admin.updateUserById(req.params.id, { password });
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 // ===== CATEGORIES & SUBCATEGORIES =====
 
 router.get('/categories', async (req, res) => {
